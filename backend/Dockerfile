@@ -29,4 +29,5 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENTRYPOINT []
 
 # CMD ["uvicorn", "src:app", "--host", "0.0.0.0", "--port", "9999", "--log-level", "error"]
+# CMD ["uvicorn", "src:app", "--host", "0.0.0.0", "--port", "9999", "--workers", "3"]
 CMD ["uvicorn", "src:app", "--host", "0.0.0.0", "--port", "9999"]
