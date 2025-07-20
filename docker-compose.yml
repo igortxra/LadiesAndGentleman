@@ -34,17 +34,20 @@ services:
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
+      - REDIS_URL=redis://redis:6379
     deploy:
       resources:
         limits:
-          cpus: "0.625"
-          memory: "165MB"
+          cpus: "0.575"
+          memory: "150MB"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://backend-2:9999/health"]
       start_period: 10s
       timeout: 1s
       interval: 10m
       retries: 3
+    depends_on:
+      - redis
 
   backend-2: 
     build:
@@ -56,17 +59,34 @@ services:
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
+      - REDIS_URL=redis://redis:6379
     deploy:
       resources:
         limits:
-          cpus: "0.625"
-          memory: "165MB"
+          cpus: "0.575"
+          memory: "150MB"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://backend-2:9999/health"]
       start_period: 10s
       timeout: 1s
       interval: 10m
       retries: 3
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+      - payment-processor
+    command: redis-server --maxmemory 20mb --maxmemory-policy allkeys-lru --save ""
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: '20MB'
 
 networks:
   backend:
