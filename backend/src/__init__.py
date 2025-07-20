@@ -6,13 +6,15 @@ import json
 
 app = FastAPI(title="Rinha Backend API", version="1.0.0")
 
-redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
 r = Redis.from_url(redis_url, decode_responses=False)
-queue_name = "payments"
+stream_name = "payments"
+
 
 @app.post("/payments", status_code=200)
 async def payments_endpoint(payment: dict):
-    await r.lpush("payments", json.dumps(payment))
+    await r.xadd(stream_name, payment)
     return
 
 

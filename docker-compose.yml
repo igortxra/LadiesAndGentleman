@@ -32,13 +32,11 @@ services:
       - backend
       - payment-processor
     environment:
-      - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
-      - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
       - REDIS_URL=redis://redis:6379
     deploy:
       resources:
         limits:
-          cpus: "0.575"
+          cpus: "0.525"
           memory: "150MB"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://backend-2:9999/health"]
@@ -48,6 +46,7 @@ services:
       retries: 3
     depends_on:
       - redis
+      - worker
 
   backend-2: 
     build:
@@ -57,13 +56,11 @@ services:
       - backend
       - payment-processor
     environment:
-      - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
-      - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
       - REDIS_URL=redis://redis:6379
     deploy:
       resources:
         limits:
-          cpus: "0.575"
+          cpus: "0.525"
           memory: "150MB"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://backend-2:9999/health"]
@@ -73,6 +70,7 @@ services:
       retries: 3
     depends_on:
       - redis
+      - worker
 
   redis:
     image: redis:alpine
@@ -87,6 +85,25 @@ services:
         limits:
           cpus: '0.1'
           memory: '20MB'
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    networks:
+      - backend
+      - payment-processor
+    environment:
+      - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
+      - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
+      - REDIS_URL=redis://redis:6379
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "100MB"
+    depends_on:
+      - redis
 
 networks:
   backend:
