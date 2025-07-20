@@ -10,6 +10,9 @@ ENV UV_COMPILE_BYTECODE=1
 # Copy from the cache instead of linking since it's a mounted volume
 ENV UV_LINK_MODE=copy
 
+# Install curl fo healthchecks
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
 # Install the project's dependencies using the lockfile and settings
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
@@ -29,5 +32,6 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENTRYPOINT []
 
 # CMD ["uvicorn", "src:app", "--host", "0.0.0.0", "--port", "9999", "--log-level", "error"]
-# CMD ["uvicorn", "src:app", "--host", "0.0.0.0", "--port", "9999", "--workers", "3"]
-CMD ["uvicorn", "src:app", "--host", "0.0.0.0", "--port", "9999"]
+# CMD ["uvicorn", "src:app", "--host", "0.0.0.0", "--port", "9999", "--workers", "4"]
+# CMD ["uvicorn", "src:app", "--host", "0.0.0.0", "--port", "9999"]
+CMD ["uvicorn", "src:app", "--host", "0.0.0.0", "--port", "9999", "--workers", "4", "--log-level", "warning", "--no-access-log"]
