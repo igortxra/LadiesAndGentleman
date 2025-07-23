@@ -4,6 +4,7 @@ from redis.asyncio import Redis
 from datetime import datetime, timezone
 import httpx
 import asyncio
+from dateutil.parser import isoparse
 
 
 
@@ -55,10 +56,19 @@ r = Redis.from_url(REDIS_URL, decode_responses=True)
 
 async def process_payment_msg(msg_id, payload, url, client: httpx.AsyncClient, processor_name: str):
     try:
+        # req_at = datetime.now(timezone.utc)
+        req_at = isoparse(payload["requestedAt"])
+
         response = await client.post(f"{url}/payments", json=payload, timeout=10)
         if response.status_code == 200:
             await r.xack(STREAM_NAME, "payment-workers", msg_id)
+            # STORE
+            score = req_at.timestamp()
+            # if response.elapsed.total_seconds() >= 1:
+            #     await asyncio.sleep(0.1)
+            await r.zadd(f"{STREAM_NAME}:{processor_name}", {msg_id: score})
             return
+
 
     except (httpx.ConnectError, httpx.ConnectTimeout):
         HEALTH_STATUS[processor_name]["failing"] = True
@@ -105,7 +115,7 @@ async def health_check(processor_name: str, delay: float = 0, interval = 5):
             HEALTH_STATUS[processor_name] = response.json()
             HEALTH_STATUS[processor_name]["last_failing"] = last_failing
         else:
-            HEALTH_STATUS[processor_name] = {"failing": True, "minResponseTime": 999, "last_failing": HEALTH_STATUS[processor_name]["last_failing"]}
+            HEALTH_STATUS[processor_name] = {"failing": True, "minResponseTime": 9999, "last_failing": HEALTH_STATUS[processor_name]["last_failing"]}
 
         await asyncio.sleep(interval)
 
