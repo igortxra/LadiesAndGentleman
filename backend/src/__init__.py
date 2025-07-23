@@ -1,7 +1,7 @@
+from datetime import datetime
 from fastapi import FastAPI, Query
 from redis.asyncio import Redis
 import os
-import json
 
 
 app = FastAPI(title="Rinha Backend API", version="1.0.0")
@@ -26,15 +26,42 @@ async def payments_summary_endpoint(
     return {
         "default" : {
             "totalRequests": 0,
-            "totalAmount": round(0 * 19.9, 2),
+            "totalAmount": 0
         },
         "fallback" : {
             "totalRequests": 0,
-            "totalAmount": round(0 * 19.9, 2),
+            "totalAmount": 0
         }
     }
+    # # Converte strings para timestamp
+    # def to_timestamp(dt_str):
+    #     if not dt_str:
+    #         return None
+    #     return datetime.fromisoformat(dt_str.replace("Z", "+00:00")).timestamp()
+    # 
+    # start_ts = to_timestamp(from_datetime) or 0
+    # end_ts = to_timestamp(to_datetime) or "+inf"
+    #
+    # # Faz a contagem nos dois conjuntos
+    # default_count = await r.zcount("processed_payments:default", start_ts, end_ts)
+    # fallback_count = await r.zcount("processed_payments:fallback", start_ts, end_ts)
+    #
+    # return {
+    #     "default" : {
+    #         "totalRequests": default_count,
+    #         "totalAmount": round(default_count * 19.9, 2),
+    #     },
+    #     "fallback" : {
+    #         "totalRequests": fallback_count,
+    #         "totalAmount": round(fallback_count * 19.9, 2),
+    #     }
+    # }
 
 
 @app.get("/health", status_code=200)
 async def health():
+    return
+
+@app.post("/purge-payments", status_code=200)
+async def purge():
     return

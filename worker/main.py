@@ -3,6 +3,9 @@ import os
 from redis.asyncio import Redis
 from datetime import datetime, timezone
 import httpx
+import asyncio
+
+
 
 
 # ENVIO EM LOTES QUE VARIAM CONFORME DISPOBIBILIDADE
@@ -20,93 +23,96 @@ import httpx
 # REDUZIR VOLUME QUANDO TEMPO DE RESPOSTA FOR > 500ms e < 1000ms
 # Considerar DOWN se TMEPO DE RESPOSTA (do health check) >= 1000ms
 
+# PROCESSOR_URL = {
+#     "default": os.getenv("PAYMENT_PROCESSOR_URL_DEFAULT", "http://payment-processor-default:8080"),
+#     "fallback": os.getenv("PAYMENT_PROCESSOR_URL_FALLBACK", "http://payment-processor-fallback:8080")
+# }
 
-STREAM = "payments"
-GROUP = "payment-workers"
-CONSUMER_NAME = "consumer-1"
-BATCH_SIZE = {
-    "default": 100,
-    "fallback": 100
-}
-BLOCK_TIME_MS = 500  # Espera até 500ms por mensagens
+STREAM_NAME = "payments"
+
 PROCESSOR_URL = {
     "default": os.getenv("PAYMENT_PROCESSOR_URL_DEFAULT", "http://payment-processor-default:8080"),
-    "fallback": os.getenv("PAYMENT_PROCESSOR_URL_FALLBACK", "http://payment-processor-default:8080")
+    "fallback": os.getenv("PAYMENT_PROCESSOR_URL_FALLBACK", "http://payment-processor-fallback:8080")
 }
-CURRENT_PROCESSOR = "default"
-OTHER_PROCESSOR = "fallback"
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 
+HEALTH_STATUS = {
+    "default": {"failing": False, "minResponseTime": 0},
+    "fallback": {"failing": False, "minResponseTime": 0}
+}
+
+DELAY_SECONDS = {
+    "default": 0,
+    "fallback": 0,
+}
+
+DEFAULT_WORKERS = 2
+FALLBACK_WORKERS = 2
+
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 r = Redis.from_url(REDIS_URL, decode_responses=True)
 
-async def create_group():
-    await r.xgroup_create(name=STREAM, groupname=GROUP, id="$", mkstream=True)
 
-async def process_batch(messages, client: httpx.AsyncClient):
-    for _, msgs in messages:
-        async def send_and_ack(msg_id, payload):
-            global BATCH_SIZE 
-            global PROCESSOR_URL 
-            global CURRENT_PROCESSOR 
-            global OTHER_PROCESSOR 
-            payload["requested_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-            resp = await client.post(f"{PROCESSOR_URL[CURRENT_PROCESSOR]}/payments", json=payload)
-            if resp.status_code == 200:
-                print(f"SUCESSO {CURRENT_PROCESSOR}")
-                elapsed = resp.elapsed.total_seconds()
-                if  elapsed >= 2:
-                    BATCH_SIZE[CURRENT_PROCESSOR] = 1
-                    _ = CURRENT_PROCESSOR 
-                    CURRENT_PROCESSOR = OTHER_PROCESSOR
-                    OTHER_PROCESSOR = _
-                elif  elapsed >= 1:
-                    BATCH_SIZE[CURRENT_PROCESSOR] = 1
-                    if CURRENT_PROCESSOR == "fallback":
-                        CURRENT_PROCESSOR = "default"
-                        BATCH_SIZE["default"] = 1
-                elif elapsed <= 0.3:
-                    BATCH_SIZE[CURRENT_PROCESSOR] = 200
-                elif elapsed <= 0.5:
-                    if CURRENT_PROCESSOR == "fallback":
-                        CURRENT_PROCESSOR = "default"
-                        BATCH_SIZE["default"] = 1
-                    else:
-                        BATCH_SIZE[CURRENT_PROCESSOR] = 100
-                elif elapsed > 0.5:
-                    BATCH_SIZE[CURRENT_PROCESSOR] = 100
-                    if CURRENT_PROCESSOR == "fallback":
-                        CURRENT_PROCESSOR = "default"
-                        BATCH_SIZE["default"] = 1
-                return msg_id
-            else:
-                BATCH_SIZE[CURRENT_PROCESSOR] = 1
-                _ = CURRENT_PROCESSOR 
-                CURRENT_PROCESSOR = OTHER_PROCESSOR
-                OTHER_PROCESSOR = _
-                print(f"⚠️ Falha HTTP {resp.status_code} para msg {msg_id}: {payload}")
+async def process_payment_msg(msg_id, payload, url, client: httpx.AsyncClient, processor_name: str):
+    try:
+        response = await client.post(f"{url}/payments", json=payload, timeout=10)
+        if response.status_code == 200:
+            await r.xack(STREAM_NAME, "payment-workers", msg_id)
+            return
 
-        tasks = [send_and_ack(msg_id, payload) for msg_id, payload in msgs]
-        results = await asyncio.gather(*tasks)
 
-        ids_to_ack = [msg_id for msg_id in results if msg_id]
-        if ids_to_ack:
-            await r.xack(STREAM, GROUP, *ids_to_ack)
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        HEALTH_STATUS[processor_name]["failing"] = True
 
-async def worker_loop():
-    await create_group()
+async def worker_loop(processor_name: str, consumer_name: str):
     async with httpx.AsyncClient() as client:
         while True:
-            messages = await r.xreadgroup(
-                groupname=GROUP,
-                consumername=CONSUMER_NAME,
-                streams={STREAM: '>'},
-                count=BATCH_SIZE[CURRENT_PROCESSOR],
-                block=BLOCK_TIME_MS
-            )
-            if messages:
-                print(f"LOTE SENDO ENVIADO!!!! {BATCH_SIZE}")
-                await process_batch(messages, client)
+            if HEALTH_STATUS[processor_name]["failing"]:
+                await asyncio.sleep(0.01)
+                continue
+
+            if HEALTH_STATUS[processor_name]["minResponseTime"] > 1000:
+                await asyncio.sleep(0.01)
+                continue
+    
+            msgs = await r.xreadgroup(groupname='payment-workers', consumername=consumer_name, streams={STREAM_NAME: '>'}, count=200, block=50)
+            tasks = []
+            for _, entries in msgs:
+                for msg_id, payload in entries:
+                    parsed = {k: v for k, v in payload.items()}
+                    tasks.append(process_payment_msg(msg_id, parsed, PROCESSOR_URL[processor_name], client, processor_name))
+
+            await asyncio.gather(*tasks)
+            
+            await asyncio.sleep(DELAY_SECONDS[processor_name])
+
+
+async def health_check(processor_name: str, delay: float = 0, interval = 5):
+    await asyncio.sleep(delay)
+    while True:
+        response = httpx.get(PROCESSOR_URL[processor_name] + "/payments/service-health")
+        if response.status_code == 200:
+            HEALTH_STATUS[processor_name] = response.json()
+        else:
+            HEALTH_STATUS[processor_name] = {"failing": True, "minResponseTime": 999}
+
+        print("Heatlh Check Rodando")
+        await asyncio.sleep(interval)
+
+
+async def main():
+
+    try:
+        await r.xgroup_create(name=STREAM_NAME, groupname="payment-workers", id="0", mkstream=True)
+    except Exception:
+        pass
+
+    default_workers = [worker_loop("default", f"d{i}") for i in range(DEFAULT_WORKERS)]
+    fallback_workers = [worker_loop("fallback", f"f{i}") for i in range(FALLBACK_WORKERS)]
+    
+    workers = [*default_workers, *fallback_workers, health_check("default"), health_check("fallback", 2.5)]
+
+    await asyncio.gather(*workers)
 
 if __name__ == "__main__":
-    asyncio.run(worker_loop())
-
+    asyncio.run(main())

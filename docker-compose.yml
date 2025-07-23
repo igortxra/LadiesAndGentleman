@@ -36,11 +36,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.525"
-          memory: "150MB"
+          cpus: "0.2"
+          memory: "140MB"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://backend-2:9999/health"]
-      start_period: 10s
+      test: ["CMD", "curl", "-f", "http://backend-1:9999/health"]
+      start_period: 30s
       timeout: 1s
       interval: 10m
       retries: 3
@@ -60,11 +60,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.525"
-          memory: "150MB"
+          cpus: "0.2"
+          memory: "140MB"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://backend-2:9999/health"]
-      start_period: 10s
+      start_period: 30s
       timeout: 1s
       interval: 10m
       retries: 3
@@ -79,12 +79,12 @@ services:
     networks:
       - backend
       - payment-processor
-    command: redis-server --maxmemory 20mb --maxmemory-policy allkeys-lru --save ""
+    command: redis-server --maxmemory 15mb --maxmemory-policy allkeys-lru --save ""
     deploy:
       resources:
         limits:
           cpus: '0.1'
-          memory: '20MB'
+          memory: '15MB'
 
   worker:
     build:
@@ -100,8 +100,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: "100MB"
+          cpus: "0.75"
+          memory: "35MB"
     depends_on:
       - redis
 
