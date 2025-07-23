@@ -36,8 +36,8 @@ PROCESSOR_URL = {
 }
 
 HEALTH_STATUS = {
-    "default": {"failing": False, "minResponseTime": 0},
-    "fallback": {"failing": False, "minResponseTime": 0}
+    "default": {"failing": False, "minResponseTime": 0, "last_failing": False},
+    "fallback": {"failing": False, "minResponseTime": 0, "last_failing": False}
 }
 
 DELAY_SECONDS = {
@@ -60,7 +60,6 @@ async def process_payment_msg(msg_id, payload, url, client: httpx.AsyncClient, p
             await r.xack(STREAM_NAME, "payment-workers", msg_id)
             return
 
-
     except (httpx.ConnectError, httpx.ConnectTimeout):
         HEALTH_STATUS[processor_name]["failing"] = True
 
@@ -75,6 +74,16 @@ async def worker_loop(processor_name: str, consumer_name: str):
                 await asyncio.sleep(0.01)
                 continue
     
+            if HEALTH_STATUS[processor_name]["last_failing"]:
+                pending = await r.xpending_range(STREAM_NAME, "payment-workers", "-", "+", 100)
+                to_claim = [p.message_id for p in pending if p.idle >= 60000]
+                await r.xclaim(
+                    STREAM_NAME,
+                    "payment-workers",
+                    consumername=consumer_name,
+                    min_idle_time=60000,
+                    message_ids=to_claim)
+            
             msgs = await r.xreadgroup(groupname='payment-workers', consumername=consumer_name, streams={STREAM_NAME: '>'}, count=200, block=50)
             tasks = []
             for _, entries in msgs:
@@ -92,11 +101,12 @@ async def health_check(processor_name: str, delay: float = 0, interval = 5):
     while True:
         response = httpx.get(PROCESSOR_URL[processor_name] + "/payments/service-health")
         if response.status_code == 200:
+            last_failing = HEALTH_STATUS[processor_name]["last_failing"]
             HEALTH_STATUS[processor_name] = response.json()
+            HEALTH_STATUS[processor_name]["last_failing"] = last_failing
         else:
-            HEALTH_STATUS[processor_name] = {"failing": True, "minResponseTime": 999}
+            HEALTH_STATUS[processor_name] = {"failing": True, "minResponseTime": 999, "last_failing": HEALTH_STATUS[processor_name]["last_failing"]}
 
-        print("Heatlh Check Rodando")
         await asyncio.sleep(interval)
 
 
