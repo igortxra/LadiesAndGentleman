@@ -1,7 +1,8 @@
 import asyncio
-import os
-from redis.asyncio import Redis
 from datetime import datetime, timezone
+import os
+from typing import Tuple
+from redis.asyncio import Redis
 import httpx
 import asyncio
 from dateutil.parser import isoparse
@@ -41,68 +42,120 @@ HEALTH_STATUS = {
     "fallback": {"failing": False, "minResponseTime": 0}
 }
 
-DELAY_SECONDS = {
-    "default": 0.01,
-    "fallback": 0.01,
-}
+# RECOVERY_ONLY = {
+#     "default": False,
+#     "fallback": False
+# }
 
 DEFAULT_WORKERS = 1
 FALLBACK_WORKERS = 1
 
-CONTINGENCY = {
-    "default": False,
-    "fallback": False
+BATCH = {
+    "default": 5,
+    "fallback": 5,
 }
 
-BATCH = {
-    "default": 100,
-    "fallback": 100
+RECOVERY_MODE = {
+    "default": False,
+    "fallback": False
 }
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 r = Redis.from_url(REDIS_URL, decode_responses=True)
 
 
-async def process_payment_msg(msg_id, payload, url, client: httpx.AsyncClient, processor_name: str):
+async def process_payment_msg(msg_id, payload, url, client: httpx.AsyncClient, processor_name: str, other_name: str) -> Tuple[bool, float]:
     try:
         req_at = isoparse(payload["requestedAt"])
+        
+        # MAIN PROCESSOR
         response = await client.post(f"{url}/payments", json=payload, timeout=10)
         if response.status_code == 200:
             await r.xack(STREAM_NAME, "payment-workers", msg_id)
             score = req_at.timestamp()
             await r.zadd(f"{STREAM_NAME}:{processor_name}", {msg_id: score})
-            return True, response.elapsed.total_seconds()
+            return True, response.elapsed.total_seconds() * 1000
     except (httpx.ConnectError, httpx.ConnectTimeout):
-        HEALTH_STATUS[processor_name]["failing"] = True
-        return False, 0
+        pass
+
+    RECOVERY_MODE[processor_name] = True
+    HEALTH_STATUS[processor_name]["failing"] = True
+    # BATCH[other_name] = 2
+    return False, 0
+    
+
+
+async def contingency_worker(processor_name: str, other_name: str):
+    async with httpx.AsyncClient() as client:
+        # Pega uma única mensagem
+
+    # Fica tentando processar a mesma mensagem até sucesso
+        while HEALTH_STATUS[processor_name]["failing"]:
+            msgs = await r.xreadgroup(
+                groupname='payment-workers',
+                consumername=f"{processor_name}-contingency",
+                streams={STREAM_NAME: '>'},
+                count=1,
+                block=100  # espera até 100ms por nova mensagem
+            )
+
+            if not msgs:
+                RECOVERY_MODE[processor_name] = False
+                return
+
+            # Extrai a primeira mensagem
+            for _, entries in msgs:
+                for msg_id, payload in entries:
+                    parsed = {k: v for k, v in payload.items()}
+
+                    message_processed = False
+                    while not message_processed:
+                        try:
+                            res = await process_payment_msg(msg_id, parsed, PROCESSOR_URL[processor_name], client, processor_name, other_name)
+                            success, minResponseTime = res
+
+                            # Verifica se a falha foi resolvida
+                            if success:
+                                message_processed = True
+                                if minResponseTime < 1000:
+                                    RECOVERY_MODE[processor_name] = False
+                                    HEALTH_STATUS[processor_name]["failing"] = False
+                                    HEALTH_STATUS[processor_name]["minResponseTime"] = minResponseTime
+                                    continue
+
+                        except Exception:
+                            pass
+
+                        await asyncio.sleep(0.005)
+
+                    await asyncio.sleep(0.005)
+
+        RECOVERY_MODE[processor_name] = False
+        return
 
 async def worker_loop(processor_name: str, consumer_name: str, other_name: str):
     async with httpx.AsyncClient() as client:
         while True:
-            if HEALTH_STATUS[processor_name]["failing"]:
-                await asyncio.sleep(0.01)
-                continue
+            batch = BATCH[processor_name]
+            if RECOVERY_MODE[processor_name]:
+                await asyncio.create_task(contingency_worker(processor_name, other_name))
 
-            if HEALTH_STATUS[processor_name]["minResponseTime"] > 1000:
-                await asyncio.sleep(0.01)
-                continue
-    
-            # if HEALTH_STATUS[processor_name]["last_failing"]:
-            #     pending = await r.xpending_range(STREAM_NAME, "payment-workers", "-", "+", 100)
-            #     to_claim = [p.message_id for p in pending if p.idle >= 60000]
-            #     await r.xclaim(
-            #         STREAM_NAME,
-            #         "payment-workers",
-            #         consumername=consumer_name,
-            #         min_idle_time=60000,
-            #         message_ids=to_claim)
+            else:
+                if HEALTH_STATUS[processor_name]["failing"]:
+                    await asyncio.sleep(0.01)
+                    continue
+
+                if HEALTH_STATUS[processor_name]["minResponseTime"] > 100:
+                    await asyncio.sleep(0.01)
+                    continue
             
-            msgs = await r.xreadgroup(groupname='payment-workers', consumername=consumer_name, streams={STREAM_NAME: '>'}, count=BATCH[processor_name], block=1000)
+            # BUSCA SEMPRE AS MAIS RECENTES PARA EVITAR QUE REQUISIÇÕES ATRASADAS, ESSE LOTE TEM QUE SER PROCESSADO EM ATÉ 100ms
+            msgs = await r.xreadgroup(groupname='payment-workers', consumername=consumer_name, streams={STREAM_NAME: '>'}, count=batch, block=500)
             tasks = []
             for _, entries in msgs:
                 for msg_id, payload in entries:
                     parsed = {k: v for k, v in payload.items()}
-                    tasks.append(process_payment_msg(msg_id, parsed, PROCESSOR_URL[processor_name], client, processor_name))
+                    tasks.append(process_payment_msg(msg_id, parsed, PROCESSOR_URL[processor_name], client, processor_name, other_name))
 
             if tasks:
                 await asyncio.gather(*tasks)
@@ -115,94 +168,28 @@ async def health_check(processor_name: str, other_name: str, delay: float = 0, i
 
     async with httpx.AsyncClient() as client:
         while True:
+            if RECOVERY_MODE[processor_name]:
+                await asyncio.sleep(0.1)
+                continue
+
             response = await client.get(PROCESSOR_URL[processor_name] + "/payments/service-health")
             if response.status_code == 200:
-                was_failing = HEALTH_STATUS[processor_name]["failing"]
-                HEALTH_STATUS[processor_name] = response.json()
-                if not was_failing and HEALTH_STATUS[processor_name]["failing"] and not CONTINGENCY[processor_name]:
-                    BATCH[other_name] = 200
-                    asyncio.create_task(contingency_worker(processor_name, other_name))
+                new_status = response.json()
+                old_status = HEALTH_STATUS[processor_name]
+
+                HEALTH_STATUS[processor_name] = new_status
+                if new_status["failing"]:
+                    # BATCH[other_name] *= 2
+                    if not old_status["failing"]:
+                        RECOVERY_MODE[processor_name] = True
+                else:
+                    pass
+                    # BATCH[other_name] *= 2
             else:
-                HEALTH_STATUS[processor_name] = {"failing": True, "minResponseTime": 0}
+                HEALTH_STATUS[processor_name] = {"failing": True, "minResponseTime": HEALTH_STATUS[processor_name]["minResponseTime"]}
+                # BATCH[other_name] = int(BATCH[other_name] / 2)
 
             await asyncio.sleep(interval)
-
-
-
-async def contingency_worker(processor_name: str, other_name: str):
-    CONTINGENCY[processor_name] = True
-    async with httpx.AsyncClient() as client:
-        # Pega uma única mensagem
-        msgs = await r.xreadgroup(
-            groupname='payment-workers',
-            consumername=f"{processor_name}-contingency",
-            streams={STREAM_NAME: '>'},
-            count=1,
-            block=1000  # espera até 100ms por nova mensagem
-        )
-
-        if not msgs:
-            CONTINGENCY[processor_name] = False
-            return
-
-        # Extrai a primeira mensagem
-        for _, entries in msgs:
-            for msg_id, payload in entries:
-                parsed = {k: v for k, v in payload.items()}
-
-                # Fica tentando processar a mesma mensagem até sucesso
-                while HEALTH_STATUS[processor_name]["failing"]:
-                    try:
-
-                        res = await process_payment_msg(msg_id, parsed, PROCESSOR_URL[processor_name], client, processor_name)
-                        success, minResponseTime = res
-
-                        # Verifica se a falha foi resolvida
-                        if success:
-                            CONTINGENCY[processor_name] = False
-                            BATCH[other_name] = 100
-                            HEALTH_STATUS[processor_name]["failing"] = False
-                            HEALTH_STATUS[processor_name]["minResponseTime"] = minResponseTime
-
-                            # TODO: FUCK
-                            tasks = []
-
-                            # 🔁 Recuperar mensagens paradas há mais de 60s no PEL
-                            try:
-                                cursor, pending_msgs = await r.execute_command(
-                                    "XAUTOCLAIM",
-                                    STREAM_NAME,
-                                    "payment-workers",
-                                    "PP",
-                                    60000,
-                                    "0-0",
-                                    "COUNT", 
-                                    50)
-
-                                for msg_id, payload in pending_msgs:
-                                    tasks.append(process_payment_msg(
-                                            msg_id,
-                                            payload,
-                                            PROCESSOR_URL[processor_name],
-                                            client,
-                                            processor_name))
-                                    
-                                    if tasks:
-                                        await asyncio.gather(*tasks)
-
-
-                            except Exception as e:
-                                pass
-
-                            return
-                    except Exception:
-                        pass
-
-                    await asyncio.sleep(0.005)
-
-        CONTINGENCY[processor_name] = False
-        BATCH[other_name] = 100
-
 
 
 async def main():
