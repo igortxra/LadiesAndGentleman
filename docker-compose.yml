@@ -79,12 +79,12 @@ services:
     networks:
       - backend
       - payment-processor
-    command: redis-server --maxmemory 15mb --maxmemory-policy allkeys-lru --save ""
+    command: redis-server --maxmemory 10mb --maxmemory-policy allkeys-lru --save ""
     deploy:
       resources:
         limits:
           cpus: '0.1'
-          memory: '15MB'
+          memory: '10MB'
 
   worker:
     build:
@@ -101,7 +101,7 @@ services:
       resources:
         limits:
           cpus: "0.75"
-          memory: "40MB"
+          memory: "45MB"
     depends_on:
       - redis
 
