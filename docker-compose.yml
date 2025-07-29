@@ -18,7 +18,7 @@ services:
       resources:
         limits:
           cpus: '0.25' # Não mexer aqui
-          memory: '20MB' # Não mexer aqui
+          memory: '15MB' # Não mexer aqui
     ulimits:
       nofile:
         soft: 100000
@@ -101,7 +101,7 @@ services:
       resources:
         limits:
           cpus: "0.75"
-          memory: "35MB"
+          memory: "40MB"
     depends_on:
       - redis
 

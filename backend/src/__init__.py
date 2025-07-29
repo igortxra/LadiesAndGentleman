@@ -14,9 +14,13 @@ stream_name = "payments"
 
 @app.post("/payments", status_code=200)
 async def payments_endpoint(payment: dict):
-    payment["requestedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     await r.xadd(stream_name, payment)
     return
+
+
+@app.post("/deny", status_code=200)
+async def payments_endpoint(payment: dict):
+    pass
 
 
 @app.get("/payments-summary")
