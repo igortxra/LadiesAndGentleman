@@ -23,8 +23,9 @@ HEALTH_STATUS = {
     "fallback": {"failing": False, "minResponseTime": 0},
 }
 
-DEFAULT_WORKERS = 25
-FALLBACK_WORKERS = 20
+
+DEFAULT_WORKERS = int(os.getenv("DEFAULT_WORKERS", 20))
+FALLBACK_WORKERS = int(os.getenv("FALLBACK_WORKERS", 15))
 
 BATCH = {
     "default": 1,
