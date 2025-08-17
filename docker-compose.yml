@@ -25,9 +25,7 @@ services:
         hard: 100000
 
   backend-1:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: igortxra/rinha25-api:latest
     networks:
       - backend
       - payment-processor
@@ -49,9 +47,7 @@ services:
       - worker
 
   backend-2: 
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: igortxra/rinha25-api:latest
     networks:
       - backend
       - payment-processor
@@ -87,9 +83,7 @@ services:
           memory: '10MB'
 
   worker:
-    build:
-      context: ./worker
-      dockerfile: Dockerfile
+    image: igortxra/rinha25-worker:latest
     networks:
       - backend
       - payment-processor
