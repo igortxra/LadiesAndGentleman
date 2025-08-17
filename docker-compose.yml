@@ -17,8 +17,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.25' # Não mexer aqui
-          memory: '15MB' # Não mexer aqui
+          cpus: '0.25'
+          memory: '15MB'
     ulimits:
       nofile:
         soft: 100000

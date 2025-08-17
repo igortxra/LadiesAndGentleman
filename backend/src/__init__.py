@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from fastapi import FastAPI, Query
 from redis.asyncio import Redis
 import os
@@ -18,27 +18,11 @@ async def payments_endpoint(payment: dict):
     return
 
 
-@app.post("/deny", status_code=200)
-async def payments_endpoint(payment: dict):
-    pass
-
-
 @app.get("/payments-summary")
 async def payments_summary_endpoint(
-    from_datetime: str = Query(None, alias="from"), 
+    from_datetime: str = Query(None, alias="from"),
     to_datetime: str = Query(None, alias="to"),
 ):
-    # return {
-    #     "default" : {
-    #         "totalRequests": 0,
-    #         "totalAmount": 0
-    #     },
-    #     "fallback" : {
-    #         "totalRequests": 0,
-    #         "totalAmount": 0
-    #     }
-    # }
-    # Converte strings para timestamp
     def to_timestamp(dt_str):
         if not dt_str:
             return None
@@ -47,26 +31,21 @@ async def payments_summary_endpoint(
     start_ts = to_timestamp(from_datetime) or 0
     end_ts = to_timestamp(to_datetime) or "+inf"
 
-    # Faz a contagem nos dois conjuntos
     default_count = await r.zcount(f"{stream_name}:default", start_ts, end_ts)
     fallback_count = await r.zcount(f"{stream_name}:fallback", start_ts, end_ts)
 
     return {
-        "default" : {
+        "default": {
             "totalRequests": default_count,
             "totalAmount": round(default_count * 19.9, 2),
         },
-        "fallback" : {
+        "fallback": {
             "totalRequests": fallback_count,
             "totalAmount": round(fallback_count * 19.9, 2),
-        }
+        },
     }
 
 
 @app.get("/health", status_code=200)
 async def health():
-    return
-
-@app.post("/purge-payments", status_code=200)
-async def purge():
     return

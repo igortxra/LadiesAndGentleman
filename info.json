@@ -1,0 +1,10 @@
+{
+	"name": "Igor de Souza Teixeira",
+	"social": ["https://www.linkedin.com/in/igortxra/"],
+	"source-code-repo": "https://github.com/igortxra/rinha-de-backend-2025",
+	"langs": ["python"],
+	"storages": ["redis"],
+	"messaging": ["redis"],
+	"load-balancers": ["nginx"],
+	"other-technologies": []
+}
